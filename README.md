@@ -6,6 +6,12 @@ A university group project that uses vibration readings to explore machine-condi
 
 This is an educational prototype using a small fan. It demonstrates a monitoring workflow; it does not predict remaining machine life or provide a certified fault diagnosis.
 
+## Dashboard evidence
+
+The screenshot below is evidence from a working Grafana run of this project. It shows the health index, the three acceleration axes and the time-series view. The readings are from the university prototype and are not a certified machine-health result.
+
+![Smart Machine Health Monitoring Grafana dashboard](docs/images/health-monitoring-dashboard.png)
+
 ## What the project includes
 
 - ESP32 firmware for three acceleration axes.
