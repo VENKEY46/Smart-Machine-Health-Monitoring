@@ -1,167 +1,234 @@
-# Smart Machine Health Monitoring System
+# Smart Machine Health Monitoring
 
-A vibration-based predictive-maintenance prototype. A small USB-powered fan stands in for industrial rotating equipment (CNC spindles, pumps, conveyor motors). An ESP32 with a 6-axis accelerometer streams live vibration data through an MQTT → InfluxDB → Grafana pipeline, with an unsupervised machine-learning model (Isolation Forest) scoring machine health in real time — trained entirely on healthy data, with no labeled faults required.
+A university group project that uses vibration readings to explore machine-condition monitoring. An ESP32 and LSM6DS3 sensor send acceleration readings through MQTT. Python stores the readings in InfluxDB, extracts features, and applies an Isolation Forest model. Grafana displays the readings and model output.
 
----
+**Maintained by Venkatareddi Kumar Elisetty (VENKEY46).** Developed as a university group project. This repository includes the team recordings and practical improvements for setup, testing and documentation. See [project history and team credit](docs/attribution.md).
 
-## Overview
+This is an educational prototype using a small fan. It demonstrates a monitoring workflow; it does not predict remaining machine life or provide a certified fault diagnosis.
 
-Industrial predictive maintenance systems typically face a hard constraint: labeled examples of equipment failure are rare and expensive to collect. This project demonstrates an approach that works around that constraint entirely — the model learns what "normal" vibration looks like from healthy operating data alone, and flags anything that deviates from it, without ever needing to be shown a labeled fault.
+## What the project includes
 
-The full pipeline — edge sensing, message brokering, time-series storage, live dashboarding, and machine learning — runs as a reproducible, containerized stack, deployable with a single command.
+- ESP32 firmware for three acceleration axes.
+- The team's baseline and imbalance recordings.
+- Shared five-second feature extraction for training and live scoring.
+- Local model training and a repeatable evaluation command.
+- An MQTT-to-InfluxDB bridge and a provisioned Grafana dashboard.
+- A recorded-data replay command for people without the hardware.
+- Tests for signal features, bad readings, model paths and message processing.
 
 ## Architecture
 
-```
-USB Fan + LSM6DS3 Sensor
-        │  vibration
-        ▼
-ESP32 (read sensor → format JSON → publish MQTT, 100Hz)
-        │  MQTT: sensors/fan1/vibration
-        ▼
-Mosquitto (MQTT broker)
-        │
-        ▼
-bridge.py  ──────────────┬─────────────────────────
-        │                │
-   write raw point   buffer 5s window → extract
-   (ax, ay, az)       features → Isolation Forest
-        │                │  → health score
-        └───────┬────────┘
-                 ▼
-             InfluxDB (vibration + health measurements)
-                 │
-                 ▼
-             Grafana (time series + health gauge, 5s refresh)
-                 │
-                 ▼
-             User (live dashboard)
+```mermaid
+flowchart TD
+    Sensor["ESP32 + LSM6DS3"] --> Broker["Mosquitto MQTT"]
+    Replay["Recorded CSV replay"] --> Broker
+    Broker --> Bridge["Python bridge"]
+    Bridge --> Raw["Raw acceleration"]
+    Bridge --> Features["Five-second features"]
+    Features --> Model["Isolation Forest"]
+    Model --> Scores["Decision score + display index"]
+    Raw --> DB["InfluxDB"]
+    Scores --> DB
+    DB --> Dashboard["Grafana"]
+    Baseline["Baseline recording"] --> Train["Offline training"]
+    Train --> Model
 ```
 
-## Hardware
+Use either the sensor or replay as the source. Do not run both on the same topic at the same time.
 
-| Component | Details |
+The [original team architecture image](<End-to-end-System Architecture.jpg>) is also retained. The diagram above shows the added replay option and the runnable layout in this copy.
+
+## Start here: run the recorded-data analysis
+
+You need **Git and Python 3.12**. Docker and the ESP32 are not needed for this first part.
+
+### 1. Download the repository
+
+In a VS Code terminal or Windows PowerShell, run:
+
+```powershell
+git clone https://github.com/VENKEY46/Smart-Machine-Health-Monitoring.git
+cd Smart-Machine-Health-Monitoring
+```
+
+You can also use **Code → Download ZIP**, extract it, and open the extracted folder in VS Code. Run the following commands in the folder containing this README. A ZIP does not include Git history.
+
+### 2. Install the Python packages
+
+These Windows commands use the virtual environment directly, so activation is not needed:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+```
+
+On Linux/macOS, replace `.\.venv\Scripts\python.exe` below with `.venv/bin/python`.
+
+### 3. Train your local model
+
+```powershell
+.\.venv\Scripts\python.exe -m backend.train_model
+```
+
+This reads `baseline_normal.csv` and creates three files in `models/generated/`:
+
+| Output | Purpose |
 |---|---|
-| Microcontroller | ESP32-WROOM-32E DevKitC |
-| Sensor | Seeed Grove LSM6DS3 (6-axis accelerometer + gyroscope), I2C address `0x6A` |
-| Wiring | Grove 4-pin cable → breadboard → ESP32: Yellow=GPIO22 (SCL), White=GPIO21 (SDA), Red=**3V3** (not 5V), Black=GND |
-| Test asset | Small USB-powered fan (clip/clamp-mounted) |
-| Sensor mount | Taped to the fan's fixed frame/housing — never the spinning blades |
+| `isolation_forest_model.pkl` | Locally trained model |
+| `score_range.npy` | Baseline score range for the display index |
+| `training_report.json` | Window count, settings and package versions |
 
-## Software prerequisites
+The supplied model binaries directly under `models/` are preserved as original artifacts. These commands use the model you train locally. Do not load untrusted pickle/joblib files.
 
-- Docker + Docker Compose
-- Arduino IDE with ESP32 board package, `Seeed_Arduino_LSM6DS3` and `PubSubClient` libraries
-- Python 3.10+
+### 4. Evaluate the fault recording
 
-## Setup
-
-### 1. Clone and configure environment
-
-```bash
-git clone <your-repo-url>
-cd smart-machine-health-monitoring
-cp .env.example .env
+```powershell
+.\.venv\Scripts\python.exe -m backend.validate_model
 ```
 
-Edit `.env` and fill in your InfluxDB token (generated in step 3 below).
+This evaluates `fault_imbalance.csv`. The reproduced result was **108 of 108 fault-recording windows flagged**, after training on **103 baseline windows**. This is one recording, not a general accuracy estimate. See [reproduced results and limits](docs/validation.md).
 
-### 2. Start the backend stack
+### 5. Run the tests
 
-```bash
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+```
+
+The review run passed **14 tests**. The GitHub Actions workflow runs these checks, training and evaluation on future pushes.
+
+## Run the dashboard with recorded data
+
+Finish steps 1–5 above first. This part also requires Docker Desktop to be running.
+
+### 6. Create local settings
+
+```powershell
+Copy-Item .env.example .env
+```
+
+Open `.env` in VS Code. Replace `INFLUX_PASSWORD`, `GRAFANA_PASSWORD` and `INFLUX_TOKEN` with your own long values. For the token, you can generate a value locally:
+
+```powershell
+.\.venv\Scripts\python.exe -c "import secrets; print(secrets.token_hex(32))"
+```
+
+Paste that generated value after `INFLUX_TOKEN=`, then save with **Ctrl+S**. Keep `INFLUX_BUCKET=vibration` for the default dashboard. Your `.env` is ignored by Git.
+
+### 7. Start the three services
+
+```powershell
 docker compose up -d
-docker compose ps   # confirm mosquitto, influxdb, grafana are all running
+docker compose ps
 ```
 
-Default ports: Mosquitto `1883`, InfluxDB `8086`, Grafana `3011` (remapped — adjust in `docker-compose.yml` if these conflict with something on your machine).
+| Service | Default address | Purpose |
+|---|---|---|
+| Mosquitto | `localhost:1884` | MQTT messages |
+| InfluxDB | `http://localhost:8087` | Time-series database |
+| Grafana | `http://localhost:3011` | Dashboard |
 
-### 3. Configure InfluxDB
+The separate ports let this project coexist with the DAC demo. If a port is already used, change the relevant port in `.env`. If you change `INFLUX_PORT`, also update `INFLUX_URL`. Re-run `docker compose up -d` to apply port changes.
 
-1. Open `http://localhost:8086`, log in with the credentials set in `docker-compose.yml`.
-2. Go to **Load Data → API Tokens**, generate an **All Access API Token**.
-3. Paste it into your `.env` file.
+InfluxDB creates the account, organisation, bucket and token when its volume is first initialized. Editing these settings later does not change an existing database account. Keep the original working values for an existing volume.
 
-### 4. Flash the ESP32 firmware
+### 8. Start the bridge in Terminal 1
 
-1. Open `firmware/esp32_vibration_publisher/esp32_vibration_publisher.ino` in Arduino IDE.
-2. Fill in your WiFi SSID/password and your computer's local IP address (`ipconfig` / `ifconfig`) for `mqtt_server`.
-3. Select **Board: ESP32 Dev Module**, select the correct COM port, and upload.
-4. Open Serial Monitor (115200 baud) to confirm `IMU OK` and `Connected to MQTT broker`.
+From the repository root:
 
-### 5. Install Python dependencies and run the bridge
-
-```bash
-cd backend
-pip install -r requirements.txt   # or: pip install paho-mqtt influxdb-client python-dotenv pandas scikit-learn scipy joblib numpy
-python bridge.py
+```powershell
+.\.venv\Scripts\python.exe -m backend.bridge
 ```
 
-You should see live `Wrote point:` messages streaming in as the fan runs.
+Wait for **Subscribed to sensors/fan1/vibration**. Leave this terminal running.
 
-### 6. Set up Grafana
+### 9. Start replay in Terminal 2
 
-1. Open `http://localhost:3011`, log in (`admin`/`admin` by default, then set a new password).
-2. **Connections → Data sources → Add data source → InfluxDB**: Query language `Flux`, URL `http://influxdb:8086`, Org and Token from your `.env`, default bucket `vibration`.
-3. Create a dashboard with two panels:
-   - **Time series**: raw `ax`/`ay`/`az` (use `aggregateWindow()` if querying long time ranges, to avoid Grafana's point-count limit)
-   - **Gauge**: `health` score, thresholds red < 50 / yellow 50–75 / green > 75
+Open a second terminal in the same repository folder:
 
-## Training the model
-
-Pre-trained model files are included in `models/`. To retrain from scratch on the included data:
-
-```bash
-cd backend
-python train_model.py       # trains on data/baseline_normal.csv
-python validate_model.py    # validates against data/fault_imbalance.csv
+```powershell
+.\.venv\Scripts\python.exe -m backend.replay_recording
 ```
 
-To collect your own data instead:
-```bash
-python export_influx.py -10m now() ../data/baseline_normal.csv   # after a clean, undisturbed baseline recording
-python export_influx.py -10m now() ../data/fault_imbalance.csv   # after inducing a fault (e.g. taping a weight to one blade)
+This publishes the baseline recording using its recorded time gaps. After it finishes, you can replay the fault recording:
+
+```powershell
+.\.venv\Scripts\python.exe -m backend.replay_recording --file fault_imbalance.csv
 ```
 
-## How fault detection works
+This mode replays recorded data. It is not a live connection to the original fan. Network timing and shifted window boundaries can make live scores differ from the offline evaluation.
 
-1. Raw `ax`/`ay`/`az` samples are combined into a single vibration magnitude per sample.
-2. Every 5 seconds of samples are reduced to 5 statistical features: RMS, kurtosis, crest factor, standard deviation, and dominant FFT frequency.
-3. Isolation Forest is trained **only on healthy baseline windows** — no labeled fault data needed. It learns the "shape" of normal vibration by measuring how easily each point can be isolated from its neighbors via random splits.
-4. Anomalous windows (physically different from anything seen in training) get isolated in fewer splits, producing a lower anomaly score — this is mapped to a 0–100 health score shown live on the dashboard.
+### 10. Open Grafana
 
-## Results
+Open **http://localhost:3011**. Sign in with `admin` and your `GRAFANA_PASSWORD`.
 
-| Metric | Value |
+Go to **Dashboards → Machine Health → Smart Machine Health Monitoring**. The data source and dashboard are provisioned automatically. The panels show:
+
+- Acceleration on the three axes, in g.
+- A baseline-relative index from 0 to 100.
+- The model decision score: a negative value means the model flags an anomaly.
+- The received sample rate.
+- The anomaly flag: 0 or 1.
+
+Keep the range on **Last 15 minutes** and refresh on **5s**. Wait at least one scoring window after replay starts. A 0–100 index is a display scale, not a percentage probability of failure.
+
+### 11. Stop the demo
+
+Press **Ctrl+C** in both Python terminals, then run:
+
+```powershell
+docker compose stop
+```
+
+This keeps your database and Grafana volumes for the next session.
+
+## Use the real university hardware
+
+Follow [the hardware guide](docs/hardware.md) for wiring, private Wi-Fi settings, the exact sketch path, MQTT access and upload order. Start with recorded-data analysis before changing the hardware setup.
+
+## Files and folders
+
+| Path | What it contains |
 |---|---|
-| Baseline windows trained on | 103 (5-second windows, ~100Hz sample rate) |
-| Baseline score range | -0.166 to 0.305 |
-| Fault detection rate | 100% of fault windows flagged anomalous |
-| Fault score range | -0.154 to -0.053 |
-| Baseline magnitude std | 0.136 |
-| Fault magnitude std | 0.678 (~5x higher) |
+| `baseline_normal.csv` | Original team baseline recording |
+| `fault_imbalance.csv` | Original team fault recording |
+| `Vibration_Sensor_Output.xlsx` | Original supplementary workbook |
+| `feature_extraction.py` | RMS, kurtosis, crest factor, standard deviation and FFT peak |
+| `backend/settings.py` | Root-relative paths and environment settings |
+| `backend/train_model.py` | Baseline model training |
+| `backend/validate_model.py` | Evaluation on the fault recording |
+| `backend/bridge.py` | MQTT validation, database writes and live model scoring |
+| `backend/replay_recording.py` | Recorded CSV replay over MQTT |
+| `backend/InfluxDB_Generate_CSV_Script.py` | Export raw InfluxDB readings to CSV |
+| `firmware/` | ESP32 sketch and a private-settings template |
+| `models/` | Original artifacts and locally generated models |
+| `docker-compose.yml` | Mosquitto, InfluxDB and Grafana services |
+| `mosquitto/config/` | Local demonstration broker configuration |
+| `grafana/` | Data-source and dashboard provisioning |
+| `tests/` | Python checks |
+| `docs/` | Hardware, results, limitations and team attribution |
+| `.github/workflows/tests.yml` | Automated Python checks |
 
-## Known limitations
+## Export a new recording
 
-- Validated against one fault type (blade imbalance) — generalization to other fault modes (bearing wear, misalignment) is untested.
-- WiFi network stability affects data continuity; power-saving WiFi behavior on some networks can introduce periodic throttling (mitigated via `WiFi.setSleep(false)` in the firmware).
-- Effective sample rate depends on correct InfluxDB point timestamping — points without explicit timestamps can collide and silently overwrite each other under batched writes (see `bridge.py`: `.time(time.time_ns(), WritePrecision.NS)`).
+While the bridge has been receiving samples:
 
-## Project structure
-
+```powershell
+.\.venv\Scripts\python.exe -m backend.InfluxDB_Generate_CSV_Script --start=-10m --output output/new_recording.csv
 ```
-├── docker-compose.yml       # Mosquitto + InfluxDB + Grafana stack
-├── mosquitto/config/        # Broker configuration
-├── firmware/                # ESP32 Arduino sketch
-├── backend/                 # Python: MQTT bridge, feature extraction, training, export
-├── data/                    # Collected baseline and fault CSV recordings
-├── models/                  # Trained Isolation Forest model + score range
-└── docs/                    # Architecture diagram, additional documentation
-```
 
-## Contributing
+The file has `timestamp, ax, ay, az` columns. Keep the original recordings unchanged. Only train on a new baseline after checking that the source represents the normal condition you want to learn.
 
-Issues and pull requests are welcome — particularly around additional fault types, alternative sensors, or improvements to the feature-extraction pipeline.
+## Scope and limitations
 
-## License
+- The project uses one small fan and one included fault recording. Other machines and fault types have not been validated.
+- The magnitude includes gravity. This is not a calibrated vibration-velocity standard or a remaining-life model.
+- MQTT arrival timestamps and Wi-Fi timing affect the estimated sample rate and FFT frequency. The sensor's `ts` value is uptime, not a synchronized UTC clock.
+- Live and offline feature functions are shared, but their window alignment and timing differ.
+- The bridge batches database writes. A queued log line is not proof of durable storage, and there is no durable retry queue.
+- This is a single-sensor prototype. Multiple devices need distinct identities, topics and database tags.
+- The broker is anonymous for local demonstration. Keep its default loopback binding for replay. Hardware access requires a deliberate trusted-network setup.
+- Python analysis and tests were executed during this review. Docker startup, Grafana rendering and the ESP32 firmware changes still require a run on the local machine and physical hardware.
 
-MIT License — see `LICENSE` for details.
+## Team credit and license status
+
+See [attribution](docs/attribution.md). The upstream README stated “MIT License,” but its reviewed commit contained no `LICENSE` file. This copy does not add a license or change contributor ownership.

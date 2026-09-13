@@ -1,39 +1,57 @@
-import sys
+"""Export raw vibration points from InfluxDB to a training-compatible CSV."""
+import argparse
+import json
+import re
+from pathlib import Path
+
 import pandas as pd
 from influxdb_client import InfluxDBClient
 
-INFLUX_URL = "http://localhost:8086"
-INFLUX_TOKEN = " YOUR INFLUX TOKEN"  # the same one now in bridge.py
-INFLUX_ORG = "smart-machine"
-INFLUX_BUCKET = "vibration"
+from backend import settings
+
+
+def time_expression(value):
+    if value == "now()" or re.fullmatch(r"-[1-9][0-9]*(ms|s|m|h|d|w)", value):
+        return value
+    timestamp = pd.Timestamp(value)
+    if pd.isna(timestamp) or timestamp.tzinfo is None:
+        raise ValueError("Use a duration such as -10m or an ISO timestamp with a timezone.")
+    return "time(v: " + json.dumps(timestamp.isoformat()) + ")"
+
 
 def export_range(start, stop, outfile):
-    client = InfluxDBClient(url=INFLUX_URL, token=INFLUX_TOKEN, org=INFLUX_ORG)
-    query_api = client.query_api()
-
+    settings.require_influx_token()
     query = f'''
-    from(bucket: "{INFLUX_BUCKET}")
-      |> range(start: {start}, stop: {stop})
+    from(bucket: {json.dumps(settings.INFLUX_BUCKET)})
+      |> range(start: {time_expression(start)}, stop: {time_expression(stop)})
       |> filter(fn: (r) => r._measurement == "vibration")
+      |> filter(fn: (r) => r._field == "ax" or r._field == "ay" or r._field == "az")
       |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
       |> keep(columns: ["_time", "ax", "ay", "az"])
     '''
-
-    result = query_api.query_data_frame(query)
-    df = pd.concat(result, ignore_index=True) if isinstance(result, list) else result
-
-    if df is None or len(df) == 0:
-        print("No data returned — check the time range and that bridge.py was writing during it.")
-        client.close()
+    with InfluxDBClient(url=settings.INFLUX_URL, token=settings.INFLUX_TOKEN,
+                        org=settings.INFLUX_ORG) as client:
+        result = client.query_api().query_data_frame(query)
+    if isinstance(result, list):
+        result = pd.concat(result, ignore_index=True) if result else pd.DataFrame()
+    if result is None or result.empty:
+        print("No data returned. Check the time range and bridge output.")
         return
-
-    df = df.rename(columns={"_time": "timestamp"})[["timestamp", "ax", "ay", "az"]]
-    df.to_csv(outfile, index=False)
+    df = result.rename(columns={"_time": "timestamp"})[["timestamp", "ax", "ay", "az"]]
+    outfile = Path(outfile)
+    outfile.parent.mkdir(parents=True, exist_ok=True)
+    df.sort_values("timestamp").to_csv(outfile, index=False)
     print(f"Saved {len(df)} rows to {outfile}")
-    client.close()
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--start", default="-10m")
+    parser.add_argument("--stop", default="now()")
+    parser.add_argument("--output", type=Path, default=settings.ROOT / "output" / "export.csv")
+    args = parser.parse_args()
+    export_range(args.start, args.stop, args.output)
+
 
 if __name__ == "__main__":
-    start = sys.argv[1] if len(sys.argv) > 1 else "-10m"
-    stop = sys.argv[2] if len(sys.argv) > 2 else "now()"
-    outfile = sys.argv[3] if len(sys.argv) > 3 else "export.csv"
-    export_range(start, stop, outfile)
+    main()

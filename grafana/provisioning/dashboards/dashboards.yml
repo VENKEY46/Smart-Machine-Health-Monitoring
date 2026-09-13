@@ -1,0 +1,7 @@
+apiVersion: 1
+providers:
+  - name: Machine Health
+    folder: Machine Health
+    type: file
+    options:
+      path: /var/lib/grafana/dashboards

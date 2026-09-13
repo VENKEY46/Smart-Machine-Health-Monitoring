@@ -3,9 +3,11 @@
 #include <PubSubClient.h>
 #include "LSM6DS3.h"
 
-const char* ssid = ""; //add your wifi name
-const char* password = ""; // add your wifi password
-const char* mqtt_server = "10.181.31.182";
+#include "config.h"
+
+const char* ssid = WIFI_SSID;
+const char* password = WIFI_PASSWORD;
+const char* mqtt_server = MQTT_SERVER;
 
 LSM6DS3 myIMU(I2C_MODE, 0x6A);
 WiFiClient espClient;
@@ -33,7 +35,7 @@ void reconnect_mqtt() {
   while (!client.connected()) {
     Serial.print("Connecting to MQTT...");
     if (client.connect("esp32-fan1")) {
-      Serial.println("connected");
+      Serial.println("Connected to MQTT broker");
     } else {
       Serial.print("failed, rc=");
       Serial.print(client.state());
@@ -45,18 +47,22 @@ void reconnect_mqtt() {
 
 void setup() {
   Serial.begin(115200);
-  Wire.begin();
+  Wire.begin(21, 22);
   if (myIMU.begin() != 0) {
-    Serial.println("IMU error");
+    Serial.println("IMU error: check wiring; sampling stopped.");
+    while (true) { delay(1000); }
   } else {
     Serial.println("IMU OK");
   }
   setup_wifi();
   WiFi.setSleep(false);
-  client.setServer(mqtt_server, 1883);
+  client.setServer(mqtt_server, MQTT_SERVER_PORT);
 }
 
 void loop() {
+  if (WiFi.status() != WL_CONNECTED) {
+    setup_wifi();
+  }
   if (!client.connected()) {
     reconnect_mqtt();
   }
