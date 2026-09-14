@@ -44,6 +44,8 @@ Use either the sensor or replay as the source. Do not run both on the same topic
 
 The [original team architecture image](<End-to-end-System Architecture.jpg>) is also retained. The diagram above shows the added replay option and the runnable layout in this copy.
 
+The corresponding editable [PlantUML architecture source](docs/architecture.puml) follows the official sensor-to-dashboard flow. It labels the Python bridge explicitly because feature extraction and Isolation Forest scoring run in the bridge process.
+
 ## Start here: run the recorded-data analysis
 
 You need **Git and Python 3.12**. Docker and the ESP32 are not needed for this first part.
