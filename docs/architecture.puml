@@ -1,0 +1,31 @@
+@startuml
+title Smart Machine Health Monitoring System
+
+skinparam backgroundColor white
+skinparam componentStyle rectangle
+skinparam shadowing false
+skinparam defaultFontName Arial
+skinparam ArrowColor #315A87
+skinparam componentBorderColor #7F9DB9
+skinparam databaseBorderColor #7F9DB9
+
+component "ESP32 + LSM6DS3\n<<Edge Device>>\nCollects vibration data\nPublishes JSON" as Edge
+
+queue "Mosquitto\n<<MQTT Broker>>\nReceives sensor data\nForwards messages" as Broker
+
+component "Python ML Bridge\n<<Processing>>\nFeature extraction\nIsolation Forest scoring\nHealth-index calculation" as ML
+
+database "InfluxDB\n<<Time-Series Database>>\nStores vibration data\nStores health score" as DB
+
+component "Grafana\n<<Dashboard>>\nHealth gauge\nTime-series charts" as Grafana
+
+Edge --> Broker : MQTT publish
+Broker --> ML : MQTT subscribe
+ML --> DB : write data
+DB --> Grafana : query data
+
+note bottom
+  The project is an educational prototype using recorded or sensor-generated data.
+  The Python bridge performs the processing; it is not a separate production service.
+end note
+@enduml
